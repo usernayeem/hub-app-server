@@ -45,17 +45,78 @@ async function run() {
 
     await initializeCounter();
 
-    // GET /totaldownloads - Fetch current download count
+    // GET /totaldownloads - Fetch all app download counts
     app.get("/totaldownloads", async (req, res) => {
       try {
-        const counterDoc = await totalDownloadCollection.findOne({
-          _id: "counter",
+        // Get all app-specific counters
+        const appCounters = await totalDownloadCollection
+          .find({ _id: { $ne: "counter" } })
+          .toArray();
+
+        // Transform to object format: { "hub-mobile": 150, "hub-library": 75 }
+        const downloadCounts = {};
+        appCounters.forEach((app) => {
+          downloadCounts[app._id] = app.count || 0;
         });
-        const totalDownloadCount = counterDoc ? counterDoc.count : 0;
+
+        res.json(downloadCounts);
+      } catch (error) {
+        console.error("Error fetching download counts:", error);
+        res.status(500).json({ error: "Failed to fetch download counts" });
+      }
+    });
+
+    // GET /totaldownloads/:appId - Fetch download count for specific app
+    app.get("/totaldownloads/:appId", async (req, res) => {
+      try {
+        const { appId } = req.params;
+        const appCounter = await totalDownloadCollection.findOne({
+          _id: appId,
+        });
+        const totalDownloadCount = appCounter ? appCounter.count : 0;
         res.json({ totalDownloadCount });
       } catch (error) {
         console.error("Error fetching download count:", error);
         res.status(500).json({ error: "Failed to fetch download count" });
+      }
+    });
+
+    // POST /totaldownloads/:appId - Track new download for specific app
+    app.post("/totaldownloads/:appId", async (req, res) => {
+      try {
+        const { appId } = req.params;
+        const { userAgent } = req.body;
+
+        // Store download record
+        await downloadInfoCollection.insertOne({
+          appId,
+          userAgent: userAgent || "Unknown",
+          ip: req.ip || req.connection.remoteAddress,
+          createdAt: new Date(),
+        });
+
+        // Increment app-specific counter
+        const result = await totalDownloadCollection.findOneAndUpdate(
+          { _id: appId },
+          { $inc: { count: 1 } },
+          { returnDocument: "after", upsert: true }
+        );
+
+        // Also increment global counter
+        await totalDownloadCollection.findOneAndUpdate(
+          { _id: "counter" },
+          { $inc: { count: 1 } },
+          { upsert: true }
+        );
+
+        res.json({
+          success: true,
+          totalDownloadCount: result.value.count,
+          message: "Download tracked successfully",
+        });
+      } catch (error) {
+        console.error("Error tracking download:", error);
+        res.status(500).json({ error: "Failed to track download" });
       }
     });
 
@@ -91,7 +152,7 @@ async function run() {
 
     // Example route
     app.get("/", (req, res) => {
-      res.json({ message: "Hello hub app server" });
+      res.json({ message: "Hello hub softwares server" });
     });
   } catch (error) {
     console.error("Error connecting to MongoDB:", error);
